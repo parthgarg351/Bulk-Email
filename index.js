@@ -60,26 +60,35 @@ function isValidEmail(email) {
 }
 
 // Route to handle email sending
-app.post("/send-emails", upload.single("emailFile"), async (req, res) => {
+app.post("/send-emails", upload.any(), async (req, res) => {
     try {
-        // Parse Excel file
-        const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+        // Find the email file
+        const emailFile = req.files.find(file => file.fieldname === "emailFile");
+        if (!emailFile) {
+            return res.status(400).json({ message: "Excel file with emails is missing." });
+        }
+
+        // Parse the Excel file
+        const workbook = xlsx.read(emailFile.buffer, { type: "buffer" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const data = xlsx.utils.sheet_to_json(sheet);
 
         // Extract and validate emails
-        const emails = data
-            .map((row) => row.email)
-            .filter((email) => email && isValidEmail(email));
-
-        const invalidEmails = data
-            .map((row) => row.email)
-            .filter((email) => email && !isValidEmail(email));
+        const emails = data.map((row) => row.email).filter((email) => email && isValidEmail(email));
+        const invalidEmails = data.map((row) => row.email).filter((email) => email && !isValidEmail(email));
 
         const { subject, message } = req.body;
-        const failedEmails = []; // Collect emails that failed to send
+        const failedEmails = [];
 
-        // Send emails
+        // Prepare attachments array from uploaded files
+        const attachments = req.files
+            .filter(file => file.fieldname.startsWith("attachment_"))
+            .map(file => ({
+                filename: file.originalname,
+                content: file.buffer,
+            }));
+
+        // Send emails with attachments
         for (const email of emails) {
             const name = extractNameFromEmail(email);
             const personalizedSubject = `Hello ${name}, ${subject}`;
@@ -91,9 +100,10 @@ app.post("/send-emails", upload.single("emailFile"), async (req, res) => {
                     to: email,
                     subject: personalizedSubject,
                     text: personalizedMessage,
+                    attachments: attachments, // Attachments array
                 });
                 console.log(`Email sent to: ${email}`);
-                broadcast(`Email sent to: ${email}`); // Send log to clients
+                broadcast(`Email sent to: ${email}`);
             } catch (error) {
                 console.error(`Failed to send email to ${email}:`, error);
                 failedEmails.push(email);
@@ -104,7 +114,7 @@ app.post("/send-emails", upload.single("emailFile"), async (req, res) => {
         // Respond with details of sent, invalid, and failed emails
         res.json({
             message: "Email process completed.",
-            sentEmails: emails.filter((email) => !failedEmails.includes(email)),
+            sentEmails: emails.filter(email => !failedEmails.includes(email)),
             failedEmails,
             invalidEmails,
         });
@@ -115,3 +125,4 @@ app.post("/send-emails", upload.single("emailFile"), async (req, res) => {
         });
     }
 });
+
